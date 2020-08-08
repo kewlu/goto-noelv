@@ -1,0 +1,10 @@
+docs*/
+
+grlib-gpl-2020.2-b4254*/
+
+#####sigasi ignores#####
+src/.library_mapping.xml
+src/.project
+src/.settings/com.sigasi.hdt.vhdl.version.prefs
+src/.settings/org.eclipse.core.resources.prefs
+#####end sigasi ignores#####
