@@ -20,6 +20,7 @@ use gaisler.jtag.all;
 use gaisler.i2c.all;
 use gaisler.subsys.all;
 use gaisler.axi.all;
+use gaisler.grusb.all;
 use gaisler.plic.all;
 use gaisler.riscv.all;
 use gaisler.l2cache.all;
@@ -46,9 +47,9 @@ entity top is
 				
 	);
 	port(
-		reset : in std_ulogic;
-		clk50p : in std_ulogic;
-		clk50n : in std_ulogic;		
+		resetn      : in  std_logic;
+		pllref      : in std_logic;
+		clk : in std_ulogic
 	);
 end;
 
@@ -79,39 +80,28 @@ architecture rtl of top is
   signal gnd            : std_ulogic;
   signal stati          : ahbstat_in_type;
   signal dsu_sel        : std_ulogic;
-
-  -- Memory
-  signal mem_aximi      : axi_somi_type;
-  signal mem_aximo      : axi_mosi_type;
-  signal axi3_aximo     : axi3_mosi_type;
-  
-  signal migrstn        : std_ulogic;
-  signal calib_done     : std_ulogic;
+  signal lresetn 		: std_ulogic;
+  signal clkm, rstn, rstraw : std_logic;
 
   -- Memory AHB Signals
   signal mem_ahbmi      : ahb_mst_in_type;
   signal mem_ahbmo      : ahb_mst_out_type;
   signal mem_ahbsi      : ahb_slv_in_type;
   signal mem_ahbso      : ahb_slv_out_type;
-  
-  -- APB
-  signal apbi           : apb_slv_in_vector;
-  signal apbo           : apb_slv_out_vector := (others => apb_none);
-
   -- AHB
   signal ahbsi          : ahb_slv_in_type;
   signal ahbso          : ahb_slv_out_vector := (others => ahbs_none);
   signal ahbmi          : ahb_mst_in_type;
   signal ahbmo          : ahb_mst_out_vector := (others => ahbm_none);
+  
+  signal usbi : grusb_in_vector(0 downto 0);
+  signal usbo : grusb_out_vector(0 downto 0);
 
   -- NOELV
   signal ext_irqi       : std_logic_vector(15 downto 0);
   signal cpurstn        : std_ulogic;
 
   -- Clocks and Reset
-  signal clkm           : std_ulogic := '0';
-  signal rstn           : std_ulogic;
-  signal rstraw         : std_ulogic;
   signal clk_300        : std_ulogic;
   signal cgi            : clkgen_in_type;
   signal cgo            : clkgen_out_type;
@@ -121,72 +111,6 @@ architecture rtl of top is
   signal lclk           : std_ulogic;
   signal rst            : std_ulogic;
   signal clkref         : std_ulogic;
-
-  -- Ethernet
-  signal gmiii          : eth_in_type;
-  signal gmiio          : eth_out_type;
-  signal sgmiii         : eth_sgmii_in_type; 
-  signal sgmiio         : eth_sgmii_out_type;
-  
-  signal sgmiirst       : std_ulogic;
-  signal ethernet_phy_int : std_ulogic;
-
-  signal rxd1           : std_ulogic;
-  signal txd1           : std_ulogic;
-
-  signal ethi           : eth_in_type;
-  signal etho           : eth_out_type;
-  signal egtx_clk       : std_ulogic;
-  signal negtx_clk      : std_ulogic;
-
-  signal clkout0o       : std_ulogic;
-  signal clkout1o       : std_ulogic;
-  signal clkout2o       : std_ulogic;
-
-  signal e1_debug_rx    : std_logic_vector(63 downto 0);
-  signal e1_debug_tx    : std_logic_vector(63 downto 0);
-  signal e1_debug_gtx   : std_logic_vector(63 downto 0);
-
-  -- I2C
-  signal i2ci           : i2c_in_type;
-  signal i2co           : i2c_out_type;
-
-  -- APB UART
-  signal u1i            : uart_in_type;
-  signal u1o            : uart_out_type;
-
-  -- AHB UART
-  signal dui            : uart_in_type;
-  signal duo            : uart_out_type;
-
-  signal dsurx_int      : std_ulogic; 
-  signal dsutx_int      : std_ulogic; 
-  signal dsuctsn_int    : std_ulogic;
-  signal dsurtsn_int    : std_ulogic;
-
-  -- Timers
-  signal gpti           : gptimer_in_type;
-  signal gpto           : gptimer_out_type;
-
-  -- GPIOs
-  signal gpioi          : gpio_in_type;
-  signal gpioo          : gpio_out_type;
-
-  -- JTAG
-  signal tck            : std_ulogic;
-  signal tckn           : std_ulogic;
-  signal tms            : std_ulogic;
-  signal tdi            : std_ulogic;
-  signal tdo            : std_ulogic;
-
-  -- SPI
-  signal spii           : spi_in_type;
-  signal spio           : spi_out_type;
-  signal slvsel         : std_logic_vector(CFG_SPICTRL_SLVS-1 downto 0);
-
-  -- Irq Bus
-  signal irqi           : nv_irq_in_vector(0 to CFG_NCPU-1);
-  signal eip            : std_logic_vector(CFG_NCPU*4-1 downto 0);
 
   -- Debug Bus
   signal dbgi           : nv_debug_in_vector(0 to CFG_NCPU-1);
@@ -204,9 +128,13 @@ architecture rtl of top is
   -- Trace buffer
   signal trace_ahbsiv     : ahb_slv_in_vector_type(0 to 1);
   signal trace_ahbmiv     : ahb_mst_in_vector_type(0 to 1);
+  
+
 
   constant ncpu     : integer := CFG_NCPU;
   constant nextslv  : integer := 3
+  
+
 -- pragma translate_off
   + 1
 -- pragma translate_on
@@ -217,8 +145,7 @@ architecture rtl of top is
   signal ldsubreak  : std_logic;
   signal lcpu0errn  : std_logic;
   signal dbgmi      : ahb_mst_in_vector_type(ndbgmst-1 downto 0);
-  signal dbgmo      : ahb_mst_out_vector_type(ndbgmst-1 downto 0);
-  
+  signal dbgmo      : ahb_mst_out_vector_type(ndbgmst-1 downto 0);  
   ----------------------------------------------------------------------
   ---  NOEL-V SUBSYSTEM ------------------------------------------------
   ----------------------------------------------------------------------
@@ -242,7 +169,7 @@ architecture rtl of top is
       devid     => 0,
       version   => 0,
       revision  => 7,
-      nodbus    => CFG_NODBGBUS  		
+      nodbus    => CFG_NODBUS 		
   	)
   	port map(
   	  clk       => clkm,
@@ -257,33 +184,45 @@ architecture rtl of top is
       dbgmi     => dbgmi,                     -- : out ahb_mst_in_vector_type(ndbgmst-1 downto 0);
       dbgmo     => dbgmo,                     -- : in  ahb_mst_out_vector_type(ndbgmst-1 downto 0);
       -- APB interface for external APB slaves
-      apbi      => apbi,                      -- : out apb_slv_in_type;
-      apbo      => apbo,                      -- : in  apb_slv_out_vector;
       -- Bootstrap signals
       dsuen     => ldsuen,
       dsubreak  => ldsubreak,
       cpu0errn  => lcpu0errn,
       -- UART connection
-      uarti     => u1i,
-      uarto     => u1o
+      uarti     => ('0', '0', '0'),      uarto     => ('0', '0', (others => '0'), '0', '0', '0', '0', '0')
   	);
   	
+  ----------------------------------------------------------------------
+  ---  AHB RAM ----------------------------------------------------------
+  -----------------------------------------------------------------------
+  ocram : if CFG_AHBRAMEN = 1 generate 
+    ahbram0 : ahbram generic map (hmask => 16#fff#,
+    pipe => 0 ,
+    maccsz => AHBDW,
+    scantest => 0,
+    endianness => GRLIB_CONFIG_ARRAY(grlib_little_endian),
+    hindex => 0 , 0 => CFG_AHBRADDR, 
+      tech => CFG_MEMTECH, kbytes => CFG_AHBRSZ)
+    port map ( rstn, clkm, ahbsi, ahbso);
+  end generate;
+
+  nram : if CFG_AHBRAMEN = 0 generate ahbso(7) <= ahbs_none; end generate;
+
   -----------------------------------------------------------------------
   ---  AHB ROM ----------------------------------------------------------
   -----------------------------------------------------------------------
 
-  brom : entity work.ahbrom
-    generic map (
-      hindex  => 1,
-      haddr   => 16#000#,
-      pipe    => 0)
-    port map (
-      rst     => rstn,
-      clk     => clkm,
-      ahbsi   => ahbsi,
-      ahbso   => ahbso(1));
-  
-  	
+--  brom : entity work.ahbrom
+--    generic map (
+--      hindex  => 1,
+--      haddr   => 16#000#,
+--      pipe    => 0)
+--    port map (
+--      rst     => rstn,
+--      clk     => clkm,
+--      ahbsi   => ahbsi,
+--      ahbso   => ahbso(1));
+--    	
   -----------------------------------------------------------------------------
   -- JTAG debug link ----------------------------------------------------------
   -----------------------------------------------------------------------------
@@ -302,33 +241,25 @@ end generate;
 ----------------------------------------------------------------------
 ---  Reset and Clock generation  -------------------------------------
 ----------------------------------------------------------------------
-
-  vcc <= (others => '1'); gnd <= (others => '0');
+  
+  vcc <= '1'; 
+  gnd <= '0';
   cgi.pllctrl <= "00"; cgi.pllrst <= rstraw;
 
-reset_pad : inpad generic map (tech => padtech, level => cmos, voltage => x18v) port map (reset, rst);
-	
-  rst0 : rstgen         -- reset generator
-  generic map (acthigh => 1, syncin => 0)
-  port map (rst, clkm, lock, rstn, rstraw);
-  lock <= (calib_done and clk125_lock) when CFG_MIG_7SERIES = 1 else cgo.clklock;
-  
-  rst1 : rstgen         -- reset generator
-  generic map (acthigh => 1)
-  port map (rst, clkm, lock, migrstn, open);
+  pllref_pad : clkpad generic map (tech => padtech) port map (pllref, cgi.pllref); 
+  clk_pad : clkpad generic map (tech => padtech) port map (clk, lclk); 
 
-  rst2 : rstgen         -- reset generator (USB)
-  generic map (acthigh => 1)
-  port map (rst, uclk, vcc(0), urstn, open);
+  clkgen0 : clkgen              -- clock generator
+    generic map (clktech, CFG_CLKMUL, CFG_CLKDIV, CFG_SDEN, 
+        CFG_INVCLK, CFG_GRPCI2_MASTER+CFG_GRPCI2_TARGET, CFG_PCIDLL, CFG_PCISYSCLK, BOARD_FREQ)
+    port map (lclk, pci_lclk, clkm, open, open, sdclkl, pciclk, cgi, cgo);
+
+  resetn_pad : inpad generic map (tech => padtech) port map (resetn, lresetn);
   
- 
-   clk_gen : if (CFG_MIG_7SERIES = 0) generate
-     clk_pad_ds : clkpad_ds generic map (tech => padtech, level => sstl, voltage => x15v) port map (clk50p, clk50n, lclk);
-     clkgen0 : clkgen        -- clock generator
-       generic map (clktech, CFG_CLKMUL, CFG_CLKDIV, CFG_MCTRL_SDEN,
-      CFG_CLK_NOFB, 0, 0, 0, BOARD_FREQ)
-       port map (lclk, lclk, clkm, open, open, open, open, cgi, cgo, open, open, open);
-   end generate;
+  rst0 : rstgen                 -- reset generator
+    port map (lresetn, clkm, clklock, rstn, rstraw);
+  
+  clklock <= cgo.clklock;
    
     
 end rtl;
