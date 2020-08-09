@@ -57,7 +57,7 @@ package config is
   constant CFG_AHBSTAT : integer := 1;
   constant CFG_AHBSTATN : integer := (1);
 -- AHB RAM
-  constant CFG_AHBRAMEN : integer := 0;
+  constant CFG_AHBRAMEN : integer := 1;
   constant CFG_AHBRSZ : integer := 4;
   constant CFG_AHBRADDR : integer := 16#A00#;
   constant CFG_AHBRPIPE : integer := 0;

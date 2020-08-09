@@ -129,10 +129,15 @@ architecture rtl of top is
   signal trace_ahbsiv     : ahb_slv_in_vector_type(0 to 1);
   signal trace_ahbmiv     : ahb_mst_in_vector_type(0 to 1);
   
+  signal pci_lclk : std_ulogic := '0';
+  
+  --Jtag
+  signal tck, tms, tdi, tdo : std_ulogic := '0';
+  
 
 
   constant ncpu     : integer := CFG_NCPU;
-  constant nextslv  : integer := 3
+  constant nextslv  : integer := 2
   
 
 -- pragma translate_off
@@ -146,17 +151,19 @@ architecture rtl of top is
   signal lcpu0errn  : std_logic;
   signal dbgmi      : ahb_mst_in_vector_type(ndbgmst-1 downto 0);
   signal dbgmo      : ahb_mst_out_vector_type(ndbgmst-1 downto 0);  
+  begin
+ 
   ----------------------------------------------------------------------
   ---  NOEL-V SUBSYSTEM ------------------------------------------------
   ----------------------------------------------------------------------
-  noelv0 : noelvsys
+  noelvv : noelvsys
   	generic map(
       fabtech   => fabtech,
       memtech   => memtech,
       ncpu      => ncpu,
       nextmst   => 1,--2,
       nextslv   => nextslv,
-      nextapb   => 6,
+      nextapb   => 0,
       ndbgmst   => ndbgmst,
       cached    => 0,
       wbmask    => 16#00FF#,
@@ -172,6 +179,7 @@ architecture rtl of top is
       nodbus    => CFG_NODBUS 		
   	)
   	port map(
+  	  apbo =>  (others => apb_none),
   	  clk       => clkm,
       rstn      => rstn,
       -- AHB bus interface for other masters (DMA units)
@@ -189,7 +197,7 @@ architecture rtl of top is
       dsubreak  => ldsubreak,
       cpu0errn  => lcpu0errn,
       -- UART connection
-      uarti     => ('0', '0', '0'),      uarto     => ('0', '0', (others => '0'), '0', '0', '0', '0', '0')
+      uarti     => ('0', '0', '0'),      uarto     => open
   	);
   	
   ----------------------------------------------------------------------
@@ -203,7 +211,7 @@ architecture rtl of top is
     endianness => GRLIB_CONFIG_ARRAY(grlib_little_endian),
     hindex => 0 , 0 => CFG_AHBRADDR, 
       tech => CFG_MEMTECH, kbytes => CFG_AHBRSZ)
-    port map ( rstn, clkm, ahbsi, ahbso);
+    port map ( rstn, clkm, ahbsi, ahbso(0));
   end generate;
 
   nram : if CFG_AHBRAMEN = 0 generate ahbso(7) <= ahbs_none; end generate;
@@ -231,7 +239,7 @@ architecture rtl of top is
     ahbjtag0 : ahbjtag
       generic map(tech => fabtech, hindex => 1)
       port map(rstn, clkm, tck, tms, tdi, tdo, dbgmi(1), dbgmo(1),
-               open, open, open, open, open, open, open, gnd(0));
+               open, open, open, open, open, open, open, gnd);
   end generate;
 
   nojtag : if CFG_AHB_JTAG = 0 generate
@@ -250,9 +258,8 @@ end generate;
   clk_pad : clkpad generic map (tech => padtech) port map (clk, lclk); 
 
   clkgen0 : clkgen              -- clock generator
-    generic map (clktech, CFG_CLKMUL, CFG_CLKDIV, CFG_SDEN, 
-        CFG_INVCLK, CFG_GRPCI2_MASTER+CFG_GRPCI2_TARGET, CFG_PCIDLL, CFG_PCISYSCLK, BOARD_FREQ)
-    port map (lclk, pci_lclk, clkm, open, open, sdclkl, pciclk, cgi, cgo);
+    generic map (clktech, CFG_CLKMUL, CFG_CLKDIV)
+    port map (lclk, pci_lclk, clkm, open, open, open, open, cgi, cgo);
 
   resetn_pad : inpad generic map (tech => padtech) port map (resetn, lresetn);
   
